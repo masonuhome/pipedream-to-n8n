@@ -1,0 +1,43 @@
+{
+  "name": "workflow-exit",
+  "version": "0.1.0",
+  "description": "Free migration report for Pipedream Workflows (shutting down March 31, 2027). Analyze your export and see what moves to n8n automatically.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "workflow-exit": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pipedream",
+    "n8n",
+    "migration",
+    "workflow-automation",
+    "pipedream-alternative"
+  ],
+  "homepage": "https://workflowexit.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/masonuhome/pipedream-to-n8n.git"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "acorn": "^8.15.0",
+    "acorn-walk": "^8.3.4",
+    "fflate": "^0.8.2",
+    "yaml": "^2.8.1",
+    "@types/node": "^22",
+    "tsup": "^8.5.1",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
