@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import type { Project, SkippedWorkflow, Step, Trigger, VirtualFile, Workflow } from "../ir";
 import { DEFAULT_BRANCH, isObj, listOf, normalizeBranch, normalizeSteps, normalizeTrigger, pick, str, type Obj, type StepContext } from "./normalize";
 import { inferTrigger } from "./infer";
+import { isZapierExport, parseZapier } from "./zapier";
 
 export class InputError extends Error {}
 
@@ -50,8 +51,10 @@ export function loadProject(input: VirtualFile[], nameHint = "Pipedream project"
   // Windows editors and PowerShell write a UTF-8 BOM, which JSON.parse rejects.
   const files = stripCommonRoot(input.map((f) => (f.text.charCodeAt(0) === 0xfeff ? { ...f, text: f.text.slice(1) } : f)));
   const manifests = files.filter((f) => MANIFEST.test(f.path) && f.text.includes("project-export"));
+  const zaps = files.filter((f) => /\.json$/i.test(f.path) && isZapierExport(f.text));
   let project: Project;
-  if (manifests.length) project = manifests.length === 1 ? parseExport(files, manifests[0]) : parseExports(files, manifests);
+  if (zaps.length && !manifests.length) project = parseZapier(zaps, nameHint === "Pipedream project" ? "Zapier account" : nameHint);
+  else if (manifests.length) project = manifests.length === 1 ? parseExport(files, manifests[0]) : parseExports(files, manifests);
   else if (files.some((f) => isSyncWorkflowFile(f))) project = parseGitSync(files, nameHint);
   else {
     const workflowJsons = files.filter((f) => f.path.endsWith(".json") && looksLikeWorkflowJson(f.text));

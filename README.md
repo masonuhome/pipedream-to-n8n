@@ -12,6 +12,7 @@ It runs on your machine. The report doesn't upload anything.
   - accounts to reconnect, secrets to re-enter and data stores to save;
   - an effort estimate and an n8n Cloud vs self-hosted recommendation.
 - **`pull`** downloads workflow definitions through the Pipedream REST API. Use it when Export Workflows isn't available to you: the export is written to the project's File Store, which Pipedream lists as an Advanced-plan feature. Your API key is only sent to `api.pipedream.com`.
+- **Moving Zaps from Zapier?** The free Zapier report runs in your browser at [workflowexit.com/zapier-to-n8n](https://workflowexit.com/zapier-to-n8n). This CLI recognizes a Zapier export and points you there.
 
 ## Quick start
 
@@ -44,7 +45,7 @@ Secret values (they come out as `<redacted>`), OAuth tokens (only an account ID)
 
 ## Converting to n8n
 
-This repository contains the free report and the API pull. Conversion into importable n8n workflow JSON, with code steps adapted for n8n Cloud, is a hosted service at [workflowexit.com](https://workflowexit.com), where the first workflow converts free. The `convert` command in this build only points you there.
+This repository contains the free report and the API pull. Conversion into importable n8n workflow JSON, with code steps adapted for n8n Cloud, is a hosted service at [workflowexit.com](https://workflowexit.com) ([for Zapier](https://workflowexit.com/zapier-to-n8n)), where the first workflow converts free. The `convert` command in this build only points you there.
 
 ## Privacy
 
@@ -53,4 +54,4 @@ This repository contains the free report and the API pull. Conversion into impor
 
 ## License
 
-MIT. Workflow Exit is an independent project. It is not affiliated with, endorsed by, or sponsored by Pipedream, Inc., Workday, Inc. or n8n GmbH. Product names are trademarks of their owners and are used only to describe compatibility.
+MIT. Workflow Exit is an independent project. It is not affiliated with, endorsed by, or sponsored by Pipedream, Inc., Workday, Inc., Zapier, Inc. or n8n GmbH. Product names are trademarks of their owners and are used only to describe compatibility.

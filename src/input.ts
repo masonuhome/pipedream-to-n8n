@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { unzip, type VirtualFile } from "./core/report";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 export const SERVICE = process.env.WORKFLOW_EXIT_URL ?? "https://workflowexit.com";
 
 /** Files of an export ZIP, a folder (GitHub Sync repo, pulled JSON) or single files, as the loader expects them. */

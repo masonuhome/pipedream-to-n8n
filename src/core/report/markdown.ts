@@ -1,5 +1,6 @@
 import type { ProjectAnalysis } from "../analyze/project";
 import type { Level, WorkflowAnalysis } from "../analyze/workflow";
+import { platformLabel } from "../platform";
 
 const DOT: Record<Level, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
 const LEVEL_TEXT: Record<Level, string> = {
@@ -14,11 +15,12 @@ export const SHUTDOWN = { stop: "March 31, 2027", deletion: "April 30, 2027" };
 
 export function renderReportMarkdown(pa: ProjectAnalysis, opts: { generatedAt?: string; tool?: string } = {}): string {
   const { totals, levels, project } = pa;
+  const P = platformLabel(project.platform);
   const L: string[] = [];
-  L.push(`# Pipedream migration report: ${project.name}`);
+  L.push(`# ${P} migration report: ${project.name}`);
   L.push("");
   L.push(
-    `Generated ${opts.generatedAt ?? new Date().toISOString().slice(0, 10)} by ${opts.tool ?? "Pipedream Exit"}. Pipedream Workflows stop running on **${SHUTDOWN.stop}**; all workflow data, including connected accounts, is deleted by **${SHUTDOWN.deletion}**.`,
+    `Generated ${opts.generatedAt ?? new Date().toISOString().slice(0, 10)} by ${opts.tool ?? "Workflow Exit (workflowexit.com)"}.${project.platform === "zapier" ? "" : ` Pipedream Workflows stop running on **${SHUTDOWN.stop}**; all workflow data, including connected accounts, is deleted by **${SHUTDOWN.deletion}**.`}`,
   );
   L.push("");
   L.push("## Summary");
@@ -31,7 +33,7 @@ export function renderReportMarkdown(pa: ProjectAnalysis, opts: { generatedAt?: 
   L.push(`| ${DOT.red} Need manual work | ${levels.red} |`);
   L.push(`| Steps | ${totals.steps} (${totals.codeSteps} code, ${totals.actions} actions, ${totals.mappedActions} with automatic mapping) |`);
   L.push(`| Accounts to reconnect | ${pa.apps.length} app(s) |`);
-  L.push(`| Secrets to re-enter | ${totals.secrets} |`);
+  L.push(`| Secrets to ${project.platform === "zapier" ? "move to credentials" : "re-enter"} | ${totals.secrets} |`);
   L.push(`| Estimated effort by hand | ~${totals.manualHours} h |`);
   L.push(`| Estimated effort with the converter | ~${totals.withToolHours} h |`);
   L.push("");
@@ -65,7 +67,7 @@ export function renderReportMarkdown(pa: ProjectAnalysis, opts: { generatedAt?: 
     L.push("");
     for (const w of pa.workflows.filter((x) => x.usesDataStore)) {
       const ids = (w.dataStores ?? []).map((id) => `\`${id}\``).join(", ");
-      L.push(`- Data store used by **${esc(w.workflow.name)}**${ids ? ` (${ids})` : ""}: export the records (key/value) from the Pipedream UI or with a one-off workflow.`);
+      L.push(`- Data store used by **${esc(w.workflow.name)}**${ids ? ` (${ids})` : ""}: export the records with the read-only exporter step (https://workflowexit.com/pipedream-data-stores) and add the file to the report, so the converted workflow comes with them preloaded.`);
     }
     for (const n of pa.fileStoreWorkflows) L.push(`- File Store used by **${esc(n)}**: download the files.`);
     L.push("");
@@ -83,7 +85,7 @@ export function renderReportMarkdown(pa: ProjectAnalysis, opts: { generatedAt?: 
   if (pa.envVars.length) {
     L.push("## Environment variables to recreate");
     L.push("");
-    L.push("Pipedream does not export environment variable values. Create them as n8n Variables (or env vars on self-hosted n8n):");
+    L.push(`${P} does not export environment variable values. Create them as n8n Variables (or env vars on self-hosted n8n):`);
     L.push("");
     L.push(pa.envVars.map((e) => `\`${e}\``).join(", "));
     L.push("");
@@ -101,7 +103,7 @@ export function renderReportMarkdown(pa: ProjectAnalysis, opts: { generatedAt?: 
 
   L.push("## Workflows");
   L.push("");
-  for (const w of pa.workflows) L.push(...renderWorkflow(w));
+  for (const w of pa.workflows) L.push(...renderWorkflow(w, P));
 
   if (project.skipped.length) {
     L.push("## Skipped by the export");
@@ -112,16 +114,16 @@ export function renderReportMarkdown(pa: ProjectAnalysis, opts: { generatedAt?: 
   return L.join("\n");
 }
 
-function renderWorkflow(w: WorkflowAnalysis): string[] {
+function renderWorkflow(w: WorkflowAnalysis, P: string): string[] {
   const L: string[] = [];
   const wf = w.workflow;
   L.push(`### ${DOT[w.level]} ${esc(wf.name)}`);
   L.push("");
   L.push(
-    `${LEVEL_TEXT[w.level][0].toUpperCase()}${LEVEL_TEXT[w.level].slice(1)}.${wf.folder ? ` Folder: \`${wf.folder}\`.` : ""}${wf.inactive ? " Inactive in Pipedream." : ""} Effort: ~${w.manualHours} h by hand, ~${w.withToolHours} h with the converter.`,
+    `${LEVEL_TEXT[w.level][0].toUpperCase()}${LEVEL_TEXT[w.level].slice(1)}.${wf.folder ? ` Folder: \`${wf.folder}\`.` : ""}${wf.inactive ? ` Inactive in ${P}.` : ""} Effort: ~${w.manualHours} h by hand, ~${w.withToolHours} h with the converter.`,
   );
   L.push("");
-  L.push("| | Step | Pipedream | n8n |");
+  L.push(`| | Step | ${P} | n8n |`);
   L.push("|---|---|---|---|");
   for (const t of w.triggers) L.push(`| ${DOT[t.level]} | trigger | ${esc(t.label)} | ${esc(t.target)} |`);
   for (const s of w.steps) {

@@ -1,15 +1,16 @@
-// workflow-exit: free, local migration report for Pipedream Workflows (shutting down March 31, 2027),
+// workflow-exit: free, local migration report for Pipedream Workflows (shutting down March 31, 2027) and Zapier Zaps,
 // plus helpers to pull workflows through the Pipedream REST API and to run the hosted conversion.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { analyzeProject, InputError, loadProject, renderReportMarkdown } from "./core/report";
 import { readInput, SERVICE, VERSION } from "./input";
 
-const HELP = `workflow-exit ${VERSION}: move Pipedream workflows to n8n
+const HELP = `workflow-exit ${VERSION}: move Pipedream workflows and Zapier Zaps to n8n
 
 Usage:
   workflow-exit report <export.zip | folder | files...> [--out REPORT.md]
-      Analyze a Pipedream export locally. Nothing leaves your machine.
+      Analyze a Pipedream export, or a Zapier export (the account data ZIP or its
+      zapfile.json), locally. Nothing leaves your machine.
 
   workflow-exit pull --org <o_xxx> [--ids <file> | --id <p_xxx>] [--out ./pipedream-workflows]
       Download workflow definitions with the Pipedream REST API (for plans that
@@ -20,7 +21,7 @@ Usage:
   workflow-exit convert <export> --key <wx_...> [--target n8n-cloud|n8n-self-hosted] [--out ./n8n-migration]
       Convert with your Workflow Exit access key (sends workflow definitions to ${SERVICE}).
 
-Docs: ${SERVICE}/pipedream-to-n8n
+Docs: ${SERVICE}/pipedream-to-n8n and ${SERVICE}/zapier-to-n8n
 `;
 
 function args(argv: string[]) {
@@ -51,7 +52,7 @@ async function report(pos: string[], flags: Record<string, string | true>) {
   console.log(`  Effort: ~${totals.manualHours} h by hand, ~${totals.withToolHours} h with the converter`);
   console.log(`  Recommended: ${pa.recommendation.platform === "n8n-cloud" ? "n8n Cloud" : "self-hosted n8n"}`);
   for (const b of pa.blockers.slice(0, 5)) console.log(`  ${b.level === "red" ? "🔴" : "🟡"} ${b.message} (${b.workflows})`);
-  console.log(`\nFull report: ${out}\nConvert to n8n: ${SERVICE}/report\n`);
+  console.log(`\nFull report: ${out}\nConvert to n8n: ${SERVICE}/${project.platform === "zapier" ? "zapier-to-n8n" : "report"}\n`);
 }
 
 const API = (process.env.PIPEDREAM_API_URL ?? "https://api.pipedream.com/v1").replace(/\/$/, "");

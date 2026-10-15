@@ -1,5 +1,8 @@
 import { actionMapping, appLabel, n8nNodeForApp, normalizeApp, sourceMapping } from "../catalog";
 import { builtinActionName } from "../convert/builtinKeys";
+import { formatterSupported } from "../catalog/zapierKeys";
+import { propValue } from "../input/normalize";
+import { platformLabel } from "../platform";
 import type { CodeLang, Project, PropValue, Step, Trigger, Workflow } from "../ir";
 import { analyzeCode, dataStoreIds, isRespondAction, type CodeAnalysis } from "./code";
 import { classifyPackage, classifyPythonPackage, type PackageClass } from "./packages";
@@ -32,6 +35,7 @@ export type IssueCode =
   | "CODE_NPM_HARD"
   | "CODE_PLATFORM_AXIOS"
   | "CODE_RESPOND"
+  | "CODE_ZAPIER"
   | "CODE_DELAY"
   | "CODE_SUSPEND"
   | "CODE_RERUN"
@@ -156,6 +160,7 @@ export function accountLabel(app: string): string {
 const OMITTED_SECRET = /^step (\S+): secret prop (\S+) was omitted/;
 
 export function analyzeWorkflow(wf: Workflow): WorkflowAnalysis {
+  const P = platformLabel(wf.platform);
   const steps: StepAnalysis[] = [];
   const apps = new Set<string>();
   const secrets = new Set<string>();
@@ -171,7 +176,7 @@ export function analyzeWorkflow(wf: Workflow): WorkflowAnalysis {
 
   const visit = (list: Step[], depth: number, branch?: string) => {
     for (const s of list) {
-      const sa = analyzeStep(s, depth, branch);
+      const sa = analyzeStep(s, depth, branch, P);
       steps.push(sa);
       for (const [prop, v] of Object.entries(s.props)) {
         collectSecrets(`${s.name}.${prop}`, v, secrets);
@@ -205,7 +210,7 @@ export function analyzeWorkflow(wf: Workflow): WorkflowAnalysis {
   };
   visit(wf.steps, 0);
 
-  const triggers = wf.triggers.map((t) => analyzeTrigger(t, responds));
+  const triggers = wf.triggers.map((t) => analyzeTrigger(t, responds, P));
   wf.triggers.forEach((t, i) => {
     const name = i === 0 ? "trigger" : `trigger_${i + 1}`;
     for (const [prop, v] of Object.entries(t.props)) {
@@ -241,7 +246,10 @@ export function analyzeWorkflow(wf: Workflow): WorkflowAnalysis {
     issues.push({
       level: "info",
       code: "SECRET_REDACTED",
-      message: `${secrets.size} secret value(s) were redacted by Pipedream and must be re-entered: ${[...secrets].join(", ")}`,
+      message:
+        P === "Zapier"
+          ? `${secrets.size} secret value(s) were typed into Zapier fields and are not copied; store them as n8n credentials: ${[...secrets].join(", ")}`
+          : `${secrets.size} secret value(s) were redacted by Pipedream and must be re-entered: ${[...secrets].join(", ")}`,
     });
   }
   if (apps.size) {
@@ -332,26 +340,27 @@ function triggerAccounts(t: Trigger): string[] {
     .filter((a) => !NO_ACCOUNT_APPS.has(normalizeApp(a)));
 }
 
-function analyzeTrigger(t: Trigger, responds: boolean): TriggerAnalysis {
+function analyzeTrigger(t: Trigger, responds: boolean, P = "Pipedream"): TriggerAnalysis {
   const issues: Issue[] = [];
   let label = "Unknown trigger";
   let target = "Manual Trigger";
   const raw = isObj(t.raw) ? t.raw : {};
   const id = str(raw.id) ?? "";
+  if (t.componentKey?.startsWith("zapier:") && t.kind === "source") return analyzeZapierTrigger(t);
   switch (t.kind) {
     case "http":
-      label = "HTTP / Webhook";
+      label = P === "Zapier" ? "Webhooks by Zapier (catch hook)" : "HTTP / Webhook";
       target = responds || t.http?.customResponse ? "Webhook + Respond to Webhook" : "Webhook";
       issues.push({
         level: "info",
         code: "TRIGGER_HTTP_URL",
-        message: "The webhook URL changes. Update every service that calls the Pipedream URL after switching.",
+        message: `The webhook URL changes. Update every service that calls the ${P} URL after switching.`,
       });
       if (t.http?.auth && t.http.auth !== "none") {
         issues.push({
           level: "yellow",
           code: "TRIGGER_HTTP_RESPONSE",
-          message: `The Pipedream endpoint used ${t.http.auth} authorization. Configure Header Auth on the n8n Webhook node.`,
+          message: `The ${P} endpoint used ${t.http.auth} authorization. Configure Header Auth on the n8n Webhook node.`,
         });
       }
       break;
@@ -360,16 +369,16 @@ function analyzeTrigger(t: Trigger, responds: boolean): TriggerAnalysis {
       target = "Schedule Trigger";
       break;
     case "email":
-      label = "Email";
+      label = P === "Zapier" ? "Email by Zapier" : "Email";
       target = "Email Trigger (IMAP) or Gmail Trigger";
       issues.push({
         level: "yellow",
         code: "TRIGGER_EMAIL",
-        message: "Pipedream's unique @pipedream.net address goes away. Forward mail to a mailbox n8n can read over IMAP, or use the Gmail Trigger.",
+        message: `${P === "Zapier" ? "The @zapiermail.com address" : "Pipedream's unique @pipedream.net address"} goes away. Forward mail to a mailbox n8n can read over IMAP, or use the Gmail Trigger.`,
       });
       break;
     case "form":
-      label = "Form";
+      label = P === "Zapier" ? "Zapier Interfaces form" : "Form";
       target = "n8n Form Trigger";
       issues.push({ level: "yellow", code: "TRIGGER_FORM", message: "Recreate the form fields in the n8n Form Trigger; the form URL changes." });
       break;
@@ -441,9 +450,171 @@ function analyzeTrigger(t: Trigger, responds: boolean): TriggerAnalysis {
   }
   if (t.disabled) {
     label += " (disabled)";
-    issues.push({ level: "info", code: "TRIGGER_DISABLED", message: "This trigger is turned off in Pipedream." });
+    issues.push({ level: "info", code: "TRIGGER_DISABLED", message: `This trigger is turned off in ${P}.` });
   }
   return { trigger: t, label, target, level: issueLevel(issues), issues };
+}
+
+/** "zapier:Slack.new_message" -> {app key, action}. */
+const zapierKey = (key: string) => {
+  const [app, ...rest] = key.slice("zapier:".length).split(".");
+  return { app, action: rest.join(".") };
+};
+
+/** An app trigger of a Zap: the app's n8n trigger, or a webhook or polling schedule. */
+function analyzeZapierTrigger(t: Trigger): TriggerAnalysis {
+  const issues: Issue[] = [];
+  const { action } = zapierKey(t.componentKey ?? "");
+  const what = action.replace(/[_-]+/g, " ");
+  const label = `${appLabel(t.app ?? "")} trigger "${what}"`;
+  const mapped = t.componentKey ? sourceMapping(t.componentKey) : undefined;
+  const node = n8nNodeForApp(t.app ?? "");
+  let target = "Webhook or Schedule + HTTP Request";
+  if (mapped) {
+    target = mapped.type.replace(/^.*\./, "");
+    issues.push({ level: "green", code: "TRIGGER_SOURCE_MAPPED", message: `Maps to n8n ${target}.` });
+  } else if (ZAPIER_ONLY[t.app ?? ""]) {
+    target = ZAPIER_ONLY[t.app ?? ""].target;
+    issues.push({ level: "yellow", code: "TRIGGER_SOURCE_UNMAPPED", message: ZAPIER_ONLY[t.app ?? ""].message });
+  } else if (node) {
+    target = `${node.displayName} trigger or polling`;
+    issues.push({
+      level: "yellow",
+      code: "TRIGGER_SOURCE_NODE",
+      message: `Pick the matching event on the n8n ${node.displayName} trigger, or poll ${node.displayName} with a Schedule Trigger. Its output fields differ from Zapier's, so check the mapped fields after it.`,
+    });
+  } else {
+    issues.push({
+      level: "yellow",
+      code: "TRIGGER_SOURCE_UNMAPPED",
+      message: `n8n has no ${appLabel(t.app ?? "")} trigger. Use the app's webhooks with an n8n Webhook node, or poll its API on a schedule.`,
+    });
+  }
+  if (t.disabled) issues.push({ level: "info", code: "TRIGGER_DISABLED", message: "This Zap is turned off in Zapier." });
+  return { trigger: t, label, target, level: issueLevel(issues), issues };
+}
+
+/** Code by Zapier: JavaScript runs in a Code node with Zapier's inputData/output; Python is ported to JavaScript. */
+function analyzeZapierCode(s: Extract<Step, { kind: "code" }>, base: Pick<StepAnalysis, "name" | "kind" | "depth" | "branch">, push: (level: IssueLevel, code: IssueCode, message: string) => void, issues: Issue[]): StepAnalysis {
+  if (!s.code.trim()) {
+    push("red", "CODE_MISSING", "The step has no code.");
+    return { ...base, label: "Code by Zapier", target: "Code", level: "red", issues, lang: s.lang };
+  }
+  const a = analyzeCode(s);
+  if (a.parseError) push("red", "CODE_PARSE_ERROR", `Could not parse the code: ${a.parseError}`);
+  if (s.lang === "python") {
+    push(
+      "yellow",
+      "CODE_PYTHON",
+      `Code by Zapier (Python${a.npmImports.length ? ` with ${a.npmImports.join(", ")}` : ""}). n8n Cloud's Python can't import anything, requests included: the AI rewrite ports the step to JavaScript, or self-host n8n with the Python task runner.`,
+    );
+    return { ...base, label: "Code by Zapier (Python)", target: "Code", level: issueLevel(issues), issues, code: a, lang: s.lang };
+  }
+  push("green", "CODE_ZAPIER", "Runs in an n8n Code node: inputData, output, return and fetch() work as in Zapier.");
+  const builtin = a.npmImports.filter((p) => ["builtin", "allowed"].includes(classifyPackage(p)));
+  const sdk = a.npmImports.filter((p) => classifyPackage(p) === "sdk");
+  const hard = a.npmImports.filter((p) => classifyPackage(p) === "hard");
+  if (builtin.length) push("yellow", "CODE_NPM_BUILTIN", `Packages with n8n built-in equivalents: ${builtin.join(", ")}.`);
+  if (sdk.length) push("yellow", "CODE_NPM_SDK", `API SDKs to rewrite as HTTP calls (or allow on self-hosted): ${sdk.join(", ")}.`);
+  if (hard.length) push("red", "CODE_NPM_HARD", `Packages n8n Cloud cannot load: ${hard.join(", ")}. Needs self-hosted n8n with NODE_FUNCTION_ALLOW_EXTERNAL.`);
+  if (/\bStoreClient\b/.test(s.code)) push("yellow", "CODE_DATA_STORE", "Uses Storage by Zapier (StoreClient) from code; the AI rewrite moves it to n8n's workflow static data.");
+  return { ...base, label: "Code by Zapier (JavaScript)", target: "Code", level: issueLevel(issues), issues, code: a, lang: s.lang };
+}
+
+/** Zapier's own products, which have no n8n node of the same kind. */
+const ZAPIER_ONLY: Record<string, { level: Level; target: string; message: string }> = {
+  zapier_tables: {
+    level: "yellow",
+    target: "n8n Data Table",
+    message: "Zapier Tables: export the table as CSV and import it into an n8n Data Table, then use the Data Table node (or a Google Sheet).",
+  },
+  zapier_interfaces: { level: "yellow", target: "n8n Form Trigger", message: "Zapier Interfaces: rebuild the form with the n8n Form Trigger; the form URL changes." },
+  zapier_chatbots: { level: "red", target: "n8n Chat Trigger + AI Agent", message: "Zapier Chatbots: rebuild the chatbot with n8n's Chat Trigger and AI Agent; the chat page changes." },
+  zapier_digest: {
+    level: "yellow",
+    target: "Data Table + Schedule Trigger",
+    message: "Digest by Zapier has no n8n node: append entries to an n8n Data Table and send them from a workflow on a Schedule Trigger.",
+  },
+  zapier_human_in_the_loop: {
+    level: "yellow",
+    target: "Send and Wait for Approval",
+    message: "Human in the Loop: use Send and Wait for Approval on the Slack, Gmail, Telegram or Chat node, or a Wait node resumed by a form.",
+  },
+  zapier_looping: {
+    level: "yellow",
+    target: "Split Out + Loop Over Items",
+    message: "Looping by Zapier: split the values into items (Split Out) so the following steps run once per value, or use Loop Over Items.",
+  },
+  zapier_web_parser: { level: "yellow", target: "HTTP Request + HTML", message: "Web Parser by Zapier: fetch the page with HTTP Request and extract fields with the HTML node." },
+};
+
+/** Zapier's built-in utilities that the converter rebuilds with n8n's own nodes. */
+const ZAPIER_BUILTIN: Record<string, { target: string; message: string; level?: Level }> = {
+  "WebHook.post": { target: "HTTP Request", message: "Becomes an HTTP Request node with the same URL, data and headers." },
+  "WebHook.get": { target: "HTTP Request", message: "Becomes an HTTP Request node with the same URL, query and headers." },
+  "WebHook.put": { target: "HTTP Request", message: "Becomes an HTTP Request node with the same URL, data and headers." },
+  "WebHook.custom_request": { target: "HTTP Request", message: "Becomes an HTTP Request node with the same method, URL, data and headers." },
+  "Storage.get_value": { target: "Code (workflow static data)", message: "Reads the value from n8n's workflow static data." },
+  "Storage.set_value": { target: "Code (workflow static data)", message: "Saves the value in n8n's workflow static data." },
+  "Storage.increment_value": { target: "Code (workflow static data)", message: "Increments the value in n8n's workflow static data." },
+  "Storage.remove_value": { target: "Code (workflow static data)", message: "Removes the value from n8n's workflow static data." },
+  "ZapierMail.outbound": { target: "Send Email", message: "Becomes a Send Email node; add an SMTP credential (Email by Zapier sent from Zapier's own server)." },
+  "Delay.delay_until": { target: "Wait", message: "Becomes a Wait node that resumes at the same date and time." },
+  "AI.get_completion": {
+    target: "OpenAI (Message a model)",
+    level: "yellow",
+    message: "Becomes an OpenAI node that returns the same JSON fields; connect your own OpenAI API key (AI by Zapier billed through Zapier).",
+  },
+};
+
+/** A Zap step: built-in utilities, Zapier-only products, mapped actions, or an app's n8n node. */
+function analyzeZapierAction(s: Extract<Step, { kind: "action" }>, base: Pick<StepAnalysis, "name" | "kind" | "depth" | "branch">, push: (level: IssueLevel, code: IssueCode, message: string) => void, issues: Issue[]): StepAnalysis {
+  const { app: appKey, action } = zapierKey(s.componentKey);
+  const label = `${appLabel(s.app)}: ${action.replace(/^[0-9a-f-]{20,}$/, "code").replace(/[_-]+/g, " ")}`;
+  const builtin = ZAPIER_BUILTIN[`${appKey}.${action}`];
+  if (appKey === "ZapierFormatter") {
+    const transform = str(propValue(s.props.transform)) ?? "";
+    if (formatterSupported(transform)) {
+      push("green", "ACTION_BUILTIN", `Formatter "${transform}" becomes an n8n expression in an Edit Fields node.`);
+      return { ...base, label: `Formatter: ${transform}`, target: "Edit Fields (Set)", level: "green", issues, app: s.app };
+    }
+    push("yellow", "ACTION_APP_NODE", `Formatter "${transform || "unknown"}" has no automatic conversion yet; rebuild it with an Edit Fields node or a Code node.`);
+    return { ...base, label: `Formatter: ${transform || "unknown"}`, target: "Edit Fields or Code", level: "yellow", issues, app: s.app };
+  }
+  if (builtin) {
+    push(builtin.level ?? "green", "ACTION_BUILTIN", builtin.message);
+    return { ...base, label, target: builtin.target, level: issueLevel(issues), issues, app: s.app };
+  }
+  // Sheets rows by column letter and Airtable records by field id: the converter calls the API with the same ids.
+  if ((appKey === "GoogleSheetsV2" || appKey === "GoogleSheets") && ["add_row", "update_row"].includes(action) && Object.keys(s.props).some((k) => /^COL\$[A-Z]+$/.test(k))) {
+    push("green", "ACTION_BUILTIN", "Becomes a Google Sheets API call that writes the same columns (A, B, C…) as Zapier, with your Google Sheets credential.");
+    return { ...base, label, target: "HTTP Request (Google Sheets API)", level: "green", issues, app: s.app };
+  }
+  if (appKey === "Airtable" && ["createRecord", "updateRecord"].includes(action) && Object.keys(s.props).some((k) => k.startsWith("fields__"))) {
+    push("green", "ACTION_BUILTIN", "Becomes an Airtable API call with the same field ids as in Zapier, with your Airtable credential.");
+    return { ...base, label, target: "HTTP Request (Airtable API)", level: "green", issues, app: s.app };
+  }
+  const only = ZAPIER_ONLY[s.app];
+  if (only) {
+    push(only.level, "ACTION_NO_NODE", only.message);
+    return { ...base, label, target: only.target, level: issueLevel(issues), issues, app: s.app };
+  }
+  const mapped = actionMapping(s.componentKey);
+  const node = n8nNodeForApp(s.app);
+  if (mapped) {
+    push("green", "ACTION_MAPPED", `Maps to n8n ${mapped.type.replace(/^.*\./, "")}.`);
+    return { ...base, label, target: node?.displayName ?? mapped.type, level: "green", issues, app: s.app };
+  }
+  if (node) {
+    push(
+      "yellow",
+      "ACTION_APP_NODE",
+      `No automatic mapping for this ${appLabel(s.app)} action yet. The converter adds an n8n ${node.displayName} placeholder with the Zapier settings in its notes.`,
+    );
+    return { ...base, label, target: node.displayName, level: "yellow", issues, app: s.app };
+  }
+  push("yellow", "ACTION_NO_NODE", `n8n has no ${appLabel(s.app)} node. Call the ${appLabel(s.app)} API with an HTTP Request node.`);
+  return { ...base, label, target: "HTTP Request", level: "yellow", issues, app: s.app };
 }
 
 export function humanInterval(sec: number): string {
@@ -453,10 +624,13 @@ export function humanInterval(sec: number): string {
   return `${sec} second(s)`;
 }
 
-function analyzeStep(s: Step, depth: number, branch?: string): StepAnalysis {
+function analyzeStep(s: Step, depth: number, branch?: string, P = "Pipedream"): StepAnalysis {
   const issues: Issue[] = [];
   const base = { name: s.name, kind: s.kind, depth, branch };
   const push = (level: IssueLevel, code: IssueCode, message: string) => issues.push({ level, code, message, step: s.name });
+
+  if (s.kind === "code" && s.dialect === "zapier") return analyzeZapierCode(s, base, push, issues);
+  if (s.kind === "action" && s.componentKey.startsWith("zapier:")) return analyzeZapierAction(s, base, push, issues);
 
   if (s.kind === "code") {
     if (!s.code.trim()) {
@@ -550,7 +724,7 @@ function analyzeStep(s: Step, depth: number, branch?: string): StepAnalysis {
 
   if (s.kind === "control") {
     if (s.disabled) {
-      push("green", "CONTROL_DISABLED", "Disabled in Pipedream: becomes a disabled pass-through node; its branch steps are kept, not connected.");
+      push("green", "CONTROL_DISABLED", `Disabled in ${P}: becomes a disabled pass-through node; its branch steps are kept, not connected.`);
       return { ...base, label: `${CONTROL_LABEL[s.op] ?? "Control flow"} (disabled)`, target: "Disabled node", level: "green", issues };
     }
     if (s.op === "delay") {
@@ -566,6 +740,10 @@ function analyzeStep(s: Step, depth: number, branch?: string): StepAnalysis {
       return { ...base, label, target, level: issueLevel(issues), issues };
     }
     if (s.op === "parallel") {
+      if (P === "Zapier") {
+        push("green", "CONTROL_PARALLEL", "Each path gets an If node with its rules. As in Zapier, every path whose rules match runs, left to right.");
+        return { ...base, label: "Paths", target: "If per path", level: "green", issues };
+      }
       push("green", "CONTROL_PARALLEL", "Branches run one after another in n8n, then a Merge node and a Code node collect each branch's result.");
       return { ...base, label: CONTROL_LABEL.parallel, target: "Branches + Merge", level: "green", issues };
     }

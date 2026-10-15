@@ -1,6 +1,6 @@
 {
   "name": "workflow-exit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Free migration report for Pipedream Workflows (shutting down March 31, 2027). Analyze your export and see what moves to n8n automatically.",
   "license": "MIT",
   "type": "module",

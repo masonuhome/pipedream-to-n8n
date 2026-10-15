@@ -1,5 +1,6 @@
 import { n8nNodeForApp } from "../catalog";
 import type { Project } from "../ir";
+import { platformLabel } from "../platform";
 import type { PackageClass } from "./packages";
 import { accountLabel, analyzeWorkflow, type IssueCode, type Level, type WorkflowAnalysis } from "./workflow";
 
@@ -31,7 +32,22 @@ export interface ProjectAnalysis {
   /** Data stores by id (`ds_…`), when the input names them, with the workflows that use each. */
   dataStores: { id: string; workflows: string[] }[];
   fileStoreWorkflows: string[];
-  recommendation: { platform: Platform; reasons: string[] };
+  recommendation: { platform: Platform; reasons: string[]; facts: RecommendationFacts };
+}
+
+/** The numbers behind the recommendation, so other languages can phrase the reasons themselves. */
+export interface RecommendationFacts {
+  /** Code steps that import npm packages n8n Cloud can't load, and those packages. */
+  hardSteps: number;
+  hardPackages: string[];
+  /** Workflows with Python steps that import modules, the modules, and whether any is a third-party package. */
+  pythonWorkflows: number;
+  pythonModules: string[];
+  pythonThirdParty: boolean;
+  /** Bash or Go steps. */
+  otherLangSteps: number;
+  /** All npm packages used in code steps. */
+  packages: string[];
 }
 
 const BLOCKER_TEXT: Partial<Record<IssueCode, string>> = {
@@ -67,7 +83,20 @@ const BLOCKER_TEXT: Partial<Record<IssueCode, string>> = {
   UNKNOWN_STEP: "Unrecognized steps",
 };
 
+/** Blocker wording for Zapier accounts where Pipedream's doesn't fit. */
+const ZAPIER_BLOCKER_TEXT: Partial<Record<IssueCode, string>> = {
+  CODE_DATA_STORE: "Storage by Zapier used from code",
+  CODE_PYTHON: "Python Code by Zapier steps to port to JavaScript (n8n Cloud's Python can't import modules)",
+  TRIGGER_EMAIL: "Email by Zapier triggers (the @zapiermail.com address goes away)",
+  TRIGGER_FORM: "Zapier Interfaces forms to rebuild",
+  TRIGGER_SOURCE_UNMAPPED: "App triggers with no n8n trigger",
+  TRIGGER_SOURCE_NODE: "App triggers to pick again in n8n",
+  ACTION_APP_NODE: "Actions without an automatic mapping yet (n8n node exists)",
+  ACTION_NO_NODE: "Zapier-only products and apps with no n8n node",
+};
+
 export function analyzeProject(project: Project): ProjectAnalysis {
+  const blockerText = (code: IssueCode) => (project.platform === "zapier" ? ZAPIER_BLOCKER_TEXT[code] : undefined) ?? BLOCKER_TEXT[code];
   const workflows = project.workflows.map(analyzeWorkflow);
   const levels: Record<Level, number> = { green: 0, yellow: 0, red: 0 };
   const accounts = new Map<string, { slugs: Map<string, number>; workflows: Set<string> }>();
@@ -153,8 +182,17 @@ export function analyzeProject(project: Project): ProjectAnalysis {
   } else {
     reasons.push("Every code step can run on n8n Cloud once npm calls are rewritten to built-in helpers.");
     if (npm.size) reasons.push(`Packages to replace: ${[...npm.keys()].slice(0, 8).join(", ")}.`);
-    reasons.push("No servers to maintain; the closest experience to Pipedream.");
+    reasons.push(`No servers to maintain; the closest experience to ${platformLabel(project.platform)}.`);
   }
+  const facts: RecommendationFacts = {
+    hardSteps: codeWithHard,
+    hardPackages: hardPackages.slice(0, 6),
+    pythonWorkflows: pythonWithImports,
+    pythonModules: [...pythonModules].slice(0, 6),
+    pythonThirdParty: pythonPackages.size > 0,
+    otherLangSteps,
+    packages: [...npm.keys()].slice(0, 8),
+  };
 
   return {
     project,
@@ -170,11 +208,11 @@ export function analyzeProject(project: Project): ProjectAnalysis {
     envVars: [...env].sort(),
     npm: [...npm].sort((a, b) => b[1].workflows - a[1].workflows).map(([name, v]) => ({ name, ...v })),
     blockers: [...blockers]
-      .map(([code, b]) => ({ code, level: b.level, message: BLOCKER_TEXT[code]!, workflows: b.workflows.size }))
+      .map(([code, b]) => ({ code, level: b.level, message: blockerText(code)!, workflows: b.workflows.size }))
       .sort((a, b) => (a.level === b.level ? b.workflows - a.workflows : a.level === "red" ? -1 : 1)),
     dataStoreWorkflows: workflows.filter((w) => w.usesDataStore).map((w) => w.workflow.name),
     dataStores: [...stores].map(([id, names]) => ({ id, workflows: names })),
     fileStoreWorkflows: workflows.filter((w) => w.usesFileStore).map((w) => w.workflow.name),
-    recommendation: { platform, reasons },
+    recommendation: { platform, reasons, facts },
   };
 }

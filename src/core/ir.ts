@@ -1,11 +1,16 @@
-// Internal representation shared by all input formats (export ZIP, REST API, GitHub Sync).
+// Internal representation shared by all input formats (Pipedream export ZIP, REST API, GitHub Sync; Zapier exports).
+// Workflows from other platforms are expressed with Pipedream's semantics (steps.<name>.$return_value, props).
 
-export type SourceFormat = "export" | "api" | "gitsync" | "template";
+export type SourceFormat = "export" | "api" | "gitsync" | "template" | "zapier";
+
+/** The platform a workflow comes from. Absent means Pipedream. */
+export type Platform = "pipedream" | "zapier";
 
 export interface Project {
   id?: string;
   name: string;
   source: SourceFormat;
+  platform?: Platform;
   exportedAt?: string;
   truncated?: boolean;
   workflows: Workflow[];
@@ -25,6 +30,7 @@ export interface Workflow {
   id: string;
   name: string;
   description?: string;
+  platform?: Platform;
   inactive?: boolean;
   /** Folder path inside the project, "" for root. */
   folder: string;
@@ -92,6 +98,8 @@ export type CodeLang = "nodejs" | "python" | "bash" | "go";
 export interface CodeStep extends BaseStep {
   kind: "code";
   lang: CodeLang;
+  /** Code by Zapier: JavaScript wrapped as a component (inputData prop), Python kept as written. */
+  dialect?: "zapier";
   runtime?: string;
   code: string;
   /** Entry file path relative to the workflow folder (GitHub Sync), e.g. "build_grid/entry.mjs". */
@@ -109,6 +117,8 @@ export interface ActionStep extends BaseStep {
   private: boolean;
   /** The component's source when the input carries it (REST API `savedComponent.code`, pinned to the version used). */
   source?: string;
+  /** Display labels of chosen values by prop (Zapier's `meta.parammap`: sheet and channel names…). */
+  labels?: Record<string, string>;
 }
 
 export type ControlOp = "ifelse" | "switch" | "delay" | "filter" | "end" | "parallel" | "loop" | "ai" | "unknown";
@@ -147,6 +157,8 @@ export type Condition =
   | { type: "pdrule"; left: unknown; op: string; right?: unknown; matchCase?: boolean }
   /** A rule of the registry Filter actions (`filter-*-based-on-condition`), with their operator constant. */
   | { type: "legacy"; op: string; left: unknown; right?: unknown; caseSensitive?: boolean; arrayType?: string }
+  /** A rule of a Zapier Filter or Path, with Zapier's match code ("icontains", "igreater"…). */
+  | { type: "zapier"; left: string; match: string; right?: string }
   | { type: "raw"; value: unknown };
 
 export interface UnknownStep extends BaseStep {
